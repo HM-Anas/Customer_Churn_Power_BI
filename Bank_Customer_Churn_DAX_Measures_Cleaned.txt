@@ -1,0 +1,408 @@
+BANK CUSTOMER CHURN DASHBOARD - CLEANED DAX MEASURE LIBRARY
+5 DASHBOARD PAGES + STAR SCHEMA + ML PREDICTIONS
+
+
+
+============================================================
+0. MODEL / TABLE ASSUMPTIONS
+============================================================
+
+Dashboard pages:
+1. Customer Churn Overview
+2. Customer Demographics
+3. Churn Analysis
+4. Advanced Analytics
+5. Geography & Churn Prediction
+
+Tables in the model:
+- Fact_CustomerChurn (customer-level facts; CustomerKey, AccountKey, GeographyKey, Churn, Balance, EstimatedSalary)
+- Dim_Customer (Gender, Age, Age Group, Age Group Detailed)
+- Dim_Geography (GeographyKey, Country)
+- Dim_Account (AccountKey, Credit Card, Active Member, Products, Tenure, Tenure Group)
+- Customer Overview (disconnected helper table for the overview matrix)
+- DAX_Measures (measure container; no relationships)
+- customer_churn_predictions_powerbi (ML output: customer_id, Data_Split, Actual_Churn,
+  Predicted_Churn, Churn_Probability, Risk_Level)
+
+
+RELATIONSHIPS
+
+Dimensions to fact (1-to-many, single direction, active):
+- Dim_Customer[CustomerKey]    1 -> *  Fact_CustomerChurn[CustomerKey]
+- Dim_Geography[GeographyKey]  1 -> *  Fact_CustomerChurn[GeographyKey]
+- Dim_Account[AccountKey]      1 -> *  Fact_CustomerChurn[AccountKey]
+
+Predictions to fact (many-to-one, single direction, active):
+- customer_churn_predictions_powerbi[customer_id]  *:1  Fact_CustomerChurn[CustomerKey]
+
+This assumes CustomerKey is unique in Fact_CustomerChurn (one row per customer).
+Filters therefore flow Dimension -> Fact -> Predictions, so dimension slicers
+(Country, Gender, Age Group, etc.) also filter the prediction measures.
+On Page 5, use Dim_Geography[Country] (not the prediction table's country column)
+for the map, table and chart axes so that axes and slicers behave consistently.
+
+
+HOW TO USE
+- Create each measure separately: Modeling > New measure.
+- These are measures, not calculated columns, unless explicitly labeled.
+- Reuse existing measures; do not create duplicates.
+- Confirm table and column names in the Fields pane and replace names if needed.
+- Churn coding: 1 = churned, 0 = retained.
+- Prediction probabilities are decimals from 0 to 1.
+
+
+============================================================
+1. SHARED BASE MEASURES
+============================================================
+
+Total Customers =
+DISTINCTCOUNT(Fact_CustomerChurn[CustomerKey])
+
+Churned Customers =
+CALCULATE([Total Customers], Fact_CustomerChurn[Churn] = 1)
+
+Retained Customers =
+CALCULATE([Total Customers], Fact_CustomerChurn[Churn] = 0)
+
+Churn Rate =
+DIVIDE([Churned Customers], [Total Customers], 0)
+
+Retention Rate =
+DIVIDE([Retained Customers], [Total Customers], 0)
+
+Average Customer Age =
+AVERAGE(Dim_Customer[Age])
+
+Average Tenure =
+AVERAGE(Dim_Account[Tenure])
+
+Average Customer Balance =
+AVERAGE(Fact_CustomerChurn[Balance])
+
+Average Estimated Salary =
+AVERAGE(Fact_CustomerChurn[EstimatedSalary])
+
+
+============================================================
+2. PAGE 1 - CUSTOMER CHURN OVERVIEW
+============================================================
+
+A. CALCULATED TABLE - Customer Overview
+Create using Modeling > New table (not New measure):
+
+Customer Overview =
+DATATABLE(
+    "Metric", STRING,
+    "Sort Order", INTEGER,
+    {
+        {"Total Customers", 1},
+        {"Retained Customers", 2},
+        {"Churned Customers", 3}
+    }
+)
+
+Then select Metric > Sort by column > Sort Order.
+This is a disconnected helper table; it needs no relationship.
+
+B. MEASURES - assign to the Customer Overview table
+(Select Customer Overview in the Fields pane before choosing New measure.)
+
+Customers =
+VAR SelectedMetric = SELECTEDVALUE('Customer Overview'[Metric])
+RETURN
+SWITCH(
+    SelectedMetric,
+    "Total Customers", [Total Customers],
+    "Retained Customers", [Retained Customers],
+    "Churned Customers", [Churned Customers],
+    BLANK()
+)
+
+Customer Percentage =
+VAR SelectedMetric = SELECTEDVALUE('Customer Overview'[Metric])
+RETURN
+SWITCH(
+    SelectedMetric,
+    "Total Customers", 1,
+    "Retained Customers", [Retention Rate],
+    "Churned Customers", [Churn Rate],
+    BLANK()
+)
+
+PAGE 1 VISUAL FIELD GUIDE
+- KPI cards: [Total Customers], [Churned Customers], [Retained Customers], [Churn Rate]
+- Churn Status donut: Legend = churn status; Values = [Total Customers]
+- Country bar chart: Axis = Dim_Geography[Country]; Values = [Churned Customers]
+- Churn gauge: Value = [Churn Rate]; Minimum = 0; Maximum = 1
+- Overview matrix: Rows = 'Customer Overview'[Metric]; Values = [Customers], [Customer Percentage]
+
+
+============================================================
+3. PAGE 2 - CUSTOMER DEMOGRAPHICS
+============================================================
+
+Country Customer % =
+DIVIDE(
+    [Total Customers],
+    CALCULATE([Total Customers], ALL(Dim_Geography[Country])),
+    0
+)
+
+Customer Share by Gender =
+DIVIDE(
+    [Total Customers],
+    CALCULATE([Total Customers], ALL(Dim_Customer[Gender])),
+    0
+)
+
+Customer Share by Age Group =
+DIVIDE(
+    [Total Customers],
+    CALCULATE([Total Customers], ALL(Dim_Customer[Age Group Detailed])),
+    0
+)
+NOTE: ALL() must use the same column that is on the visual's axis. If your axis is
+Dim_Customer[Age Group] instead, change the column in ALL() to match.
+
+Customer Share by Tenure Group =
+DIVIDE(
+    [Total Customers],
+    CALCULATE([Total Customers], ALL(Dim_Account[Tenure Group])),
+    0
+)
+
+PAGE 2 VISUAL FIELD GUIDE
+- Age distribution: Axis = Dim_Customer[Age Group Detailed]; Values = [Total Customers]
+- Gender donut: Legend = Dim_Customer[Gender]; Values = [Total Customers]
+- Country treemap: Category = Dim_Geography[Country]; Values = [Country Customer %]
+- Tenure x churn 100% stacked bar: Axis = Dim_Account[Tenure Group]; Values = [Total Customers];
+  Legend = churn status
+
+
+============================================================
+4. PAGE 3 - CHURN ANALYSIS
+============================================================
+
+No new measures are needed. The category on each axis supplies the filter context,
+so the shared [Churn Rate] measure recalculates by category.
+
+PAGE 3 VISUAL FIELD GUIDE
+- Age group churn: Axis = Dim_Customer[Age Group Detailed]; Values = [Churn Rate]
+- Tenure churn: Axis = Dim_Account[Tenure Group]; Values = [Churn Rate]
+- Product-count churn: Axis = Dim_Account[Products Number] (or Products Group); Values = [Churn Rate]
+- Credit-card churn: Axis = Dim_Account[Credit Card Status]; Values = [Churn Rate]
+- Active-membership churn: Axis = Dim_Account[Active Member Status]; Values = [Churn Rate]
+- Country churn: Axis = Dim_Geography[Country]; Values = [Churned Customers] and [Retained Customers]
+
+
+============================================================
+5. PAGE 4 - ADVANCED ANALYTICS
+============================================================
+
+No new measures are needed.
+
+PAGE 4 VISUAL FIELD GUIDE
+- Decomposition Tree: Analyze = [Churn Rate]; Explain by = Country, Gender, Age Group,
+  Tenure Group, Products Number/Group, Credit Card Status, Active Member Status
+- Key Influencers: Analyze = Churn / Churn Status; Explain by = customer attributes
+  (Key Influencers ranks which attributes are most associated with churn; these are
+  associations, not proven causes.)
+- Matrix: Rows = Country; Columns = Gender; Values = [Churn Rate]
+
+
+============================================================
+6. PAGE 5 - GEOGRAPHY & CHURN PREDICTION
+============================================================
+
+Confirm the prediction table and column names in the Fields pane before using these.
+Assumed table: customer_churn_predictions_powerbi
+Assumed columns: customer_id, Data_Split, Actual_Churn, Predicted_Churn,
+                 Churn_Probability, Risk_Level
+
+A. ALL-CUSTOMER PREDICTION MEASURES
+(Predictions are scored on all 10,000 customers, training rows included.)
+
+Actual Churned Customers (Prediction Table) =
+CALCULATE(
+    DISTINCTCOUNT(customer_churn_predictions_powerbi[customer_id]),
+    customer_churn_predictions_powerbi[Actual_Churn] = 1
+)
+
+Predicted Churn Customers =
+CALCULATE(
+    DISTINCTCOUNT(customer_churn_predictions_powerbi[customer_id]),
+    customer_churn_predictions_powerbi[Predicted_Churn] = 1
+)
+
+High Risk Customers =
+CALCULATE(
+    DISTINCTCOUNT(customer_churn_predictions_powerbi[customer_id]),
+    customer_churn_predictions_powerbi[Risk_Level] = "High"
+)
+
+Average Churn Probability =
+AVERAGE(customer_churn_predictions_powerbi[Churn_Probability])
+
+Predicted Churn Rate =
+DIVIDE(
+    [Predicted Churn Customers],
+    DISTINCTCOUNT(customer_churn_predictions_powerbi[customer_id]),
+    0
+)
+
+Actual Churn Rate (Prediction Table) =
+DIVIDE(
+    [Actual Churned Customers (Prediction Table)],
+    DISTINCTCOUNT(customer_churn_predictions_powerbi[customer_id]),
+    0
+)
+
+Actual vs Predicted Churn Difference =
+[Predicted Churn Customers] - [Actual Churned Customers (Prediction Table)]
+
+Actual vs Predicted Churn Difference % =
+DIVIDE(
+    [Actual vs Predicted Churn Difference],
+    [Actual Churned Customers (Prediction Table)],
+    0
+)
+
+
+B. TEST-SET-ONLY MEASURES (reliable model performance)
+Confirm the exact Data_Split value for the held-out rows (assumed "Test").
+
+Test Customers =
+CALCULATE(
+    DISTINCTCOUNT(customer_churn_predictions_powerbi[customer_id]),
+    customer_churn_predictions_powerbi[Data_Split] = "Test"
+)
+
+Test Actual Churned =
+CALCULATE(
+    DISTINCTCOUNT(customer_churn_predictions_powerbi[customer_id]),
+    customer_churn_predictions_powerbi[Data_Split] = "Test",
+    customer_churn_predictions_powerbi[Actual_Churn] = 1
+)
+
+Test Predicted Churned =
+CALCULATE(
+    DISTINCTCOUNT(customer_churn_predictions_powerbi[customer_id]),
+    customer_churn_predictions_powerbi[Data_Split] = "Test",
+    customer_churn_predictions_powerbi[Predicted_Churn] = 1
+)
+
+Test True Positives =
+CALCULATE(
+    DISTINCTCOUNT(customer_churn_predictions_powerbi[customer_id]),
+    customer_churn_predictions_powerbi[Data_Split] = "Test",
+    customer_churn_predictions_powerbi[Actual_Churn] = 1,
+    customer_churn_predictions_powerbi[Predicted_Churn] = 1
+)
+
+Test Recall =
+DIVIDE([Test True Positives], [Test Actual Churned], 0)
+
+Test Precision =
+DIVIDE([Test True Positives], [Test Predicted Churned], 0)
+
+Expected values if the model is the one on slide 16:
+Test Customers = 2,000 | Test Actual Churned = 407 | Test Predicted Churned = 240
+Test True Positives = 190 | Test Recall = 46.68% | Test Precision = 79.17%
+(Remove any page-level slicer filters when checking these.)
+
+
+PAGE 5 VISUAL FIELD GUIDE
+- KPI cards: [Predicted Churn Customers], [High Risk Customers], [Average Churn Probability]
+- Map: Location = Dim_Geography[Country]; Size/Values = [Predicted Churn Customers]
+- Actual vs Predicted by Country: Axis = Dim_Geography[Country];
+  Values = [Actual Churned Customers (Prediction Table)] and [Predicted Churn Customers]
+- Country summary table: Dim_Geography[Country], [Total Customers], [Churned Customers], [Churn Rate]
+- Prediction table: customer_id, Actual_Churn, Predicted_Churn, Churn_Probability, Risk_Level
+- Average Churn Probability is a 0-1 probability; format as Percentage.
+
+
+============================================================
+7. CHECK VALUES (card results with no slicers selected)
+============================================================
+
+Total Customers            10,000
+Churned Customers           2,037
+Retained Customers          7,963
+Churn Rate                 20.37%
+Predicted Churn Customers   1,572
+High Risk Customers         1,207
+Average Churn Probability  20.59%
+Test Recall                46.68%   (after adding the Section 6B measures)
+
+If any value differs, check the table and column names and the relationships first.
+
+
+============================================================
+8. LEGACY ALIASES (optional)
+============================================================
+
+These measures only repeat a measure above. If a visual in your report already uses one,
+you can keep it, or better, point the visual to the base measure and delete the alias.
+Do not create these in a new model.
+
+Churned Percentage = [Churn Rate]
+Retained Percentage = [Retention Rate]
+Customer Overview - Metric Value = [Customers]
+Customer Overview - Percentage = [Customer Percentage]
+Country Customer Percentage = [Country Customer %]
+Customer Percentage by Country = [Country Customer %]
+Customers by Gender = [Total Customers]
+Customers by Age Group = [Total Customers]
+Customers by Country = [Total Customers]
+Churned Customers by Country = [Churned Customers]
+Retained Customers by Country = [Retained Customers]
+Retained Customers by Tenure Group = [Retained Customers]
+Churned Customers by Tenure Group = [Churned Customers]
+Retained % within Tenure Group = [Retention Rate]
+Churned % within Tenure Group = [Churn Rate]
+Churn Rate by Age Group = [Churn Rate]
+Churn Rate by Tenure Group = [Churn Rate]
+Churn Rate by Products Number = [Churn Rate]
+Churn Rate by Credit Card = [Churn Rate]
+Churn Rate by Active Membership = [Churn Rate]
+Churn Rate for Decomposition Tree = [Churn Rate]
+Churn Rate by Country and Gender = [Churn Rate]
+Churn Rate Matrix = [Churn Rate]
+Churn Probability (Average) = [Average Churn Probability]
+Actual Churned Customers by Country = [Actual Churned Customers (Prediction Table)]
+Predicted Churn Customers by Country = [Predicted Churn Customers]
+
+Removed completely: Customer Count for Scatter Plot (no scatter visual on Page 4).
+
+
+============================================================
+9. FORMAT SETTINGS
+============================================================
+
+Format as Percentage (1 decimal place):
+- Churn Rate, Retention Rate
+- Country Customer %, Customer Share by Gender, Customer Share by Age Group,
+  Customer Share by Tenure Group
+- Average Churn Probability
+- Predicted Churn Rate, Actual Churn Rate (Prediction Table)
+- Actual vs Predicted Churn Difference %
+- Test Recall, Test Precision
+
+Format count measures as Whole Number (0 decimals, thousands separator).
+Format Churn_Probability as Percentage only if its raw values are decimals from 0 to 1.
+If raw probabilities are 0-100, do not apply percentage formatting a second time.
+
+
+============================================================
+10. COLOR GUIDE
+============================================================
+
+Actual Churned Customers: Teal #14B8A6
+Predicted Churn Customers: Navy #173B65
+Retained Customers: Light Blue #DCEAF7 / Blue #3B82F6
+High Risk: Coral #F28B82 (use sparingly)
+Page background: #EAF1F8
+Header/title: Navy #173B65
+Accent: Teal #14B8A6
+
+END OF CLEANED 5-PAGE DAX LIBRARY
