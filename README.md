@@ -43,7 +43,6 @@ python customer_churn_powerbi_simple_rf.py
 ```
 
 ## Author
-Anas Jamshed
 **Anas Jamshed**
 
 GitHub: [HM-Anas](https://github.com/HM-Anas)
